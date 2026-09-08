@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stall — dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+<style>
+  :root{
+    --ink:#1c1b19; --paper:#f6f1e7; --paper-dim:#eee6d6;
+    --brick:#b8402a; --blue:#2d4a8a; --grey:#8a8478; --line:rgba(28,27,25,0.14);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;}
+  .wrap{max-width:520px;margin:0 auto;padding:40px 20px 80px;}
+  h1{font-family:'Fraunces',serif;font-weight:700;font-style:italic;text-transform:uppercase;font-size:26px;margin:0 0 4px;}
+  .sub{font-size:13.5px;color:var(--grey);margin:0 0 28px;}
+  .card{background:var(--paper-dim);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:20px;}
+  input{width:100%;font-size:14px;padding:11px 12px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);margin-bottom:10px;}
+  button{font-weight:600;font-size:14px;border:none;border-radius:6px;cursor:pointer;padding:12px;width:100%;}
+  .btn-primary{background:var(--ink);color:var(--paper);}
+  .btn-secondary{background:none;color:var(--blue);text-decoration:underline;padding:8px;width:auto;}
+  .error{color:var(--brick);font-size:13px;margin:-4px 0 10px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:10px;}
+  .thumb{width:48px;height:48px;border-radius:8px;border:1px solid var(--line);background:var(--paper);flex-shrink:0;overflow:hidden;cursor:pointer;}
+  .thumb img{width:100%;height:100%;object-fit:cover;}
+  .link-item{display:flex;align-items:center;gap:10px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px;}
+  .link-item .info{flex:1;min-width:0;}
+  .link-item .name{font-weight:500;font-size:14px;}
+  .link-item .url{font-size:12px;color:var(--grey);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .link-item button{width:auto;background:none;color:var(--brick);font-size:12px;padding:6px;}
+  .bg-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px;}
+  .bg-thumb{aspect-ratio:1/1;border-radius:6px;overflow:hidden;border:2px solid transparent;cursor:pointer;padding:0;background:var(--paper);}
+  .bg-thumb img{width:100%;height:100%;object-fit:cover;}
+  .bg-thumb.selected{border-color:var(--brick);}
+  .share-box{display:flex;gap:8px;}
+  .share-box input{margin:0;}
+  .share-box button{width:auto;background:var(--blue);color:#fff;flex-shrink:0;}
+  h2{font-family:'Fraunces',serif;font-size:16px;margin:0 0 10px;}
+  .muted{font-size:12px;color:var(--grey);margin-top:8px;}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">Loading…</div>
+
+<input type="file" accept="image/*" capture="environment" id="camera-input" style="display:none">
+<input type="file" accept="image/*" id="gallery-input" style="display:none">
+
+<script>
+let me = null;
+let store = null;
+let pendingTarget = null; // {type:'logo'} | {type:'new'} | {type:'product', id}
+let pendingNewImage = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    method: opts.method || 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+function resizeImageFile(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > height && width > maxDim) { height = Math.round(height * maxDim / width); width = maxDim; }
+        else if (height >= width && height > maxDim) { width = Math.round(width * maxDim / height); height = maxDim; }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+document.getElementById('camera-input').addEventListener('change', onFileChosen);
+document.getElementById('gallery-input').addEventListener('change', onFileChosen);
+async function onFileChosen(e) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file || !pendingTarget) return;
+  const dataUrl = await resizeImageFile(file, 420, 0.7);
+  if (pendingTarget.type === 'logo') {
+    await api('/api/store/logo', { method: 'PUT', body: { logo: dataUrl } });
+    store.logo = dataUrl;
+  } else if (pendingTarget.type === 'new') {
+    pendingNewImage = dataUrl;
+  } else if (pendingTarget.type === 'product') {
+    const products = await api('/api/products/' + pendingTarget.id, { method: 'PUT', body: { image: dataUrl } });
+    store.products = products;
+  }
+  render();
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+async function render() {
+  const app = document.getElementById('app');
+
+  if (!me) {
+    app.innerHTML = `
+      <h1>Stall</h1>
+      <p class="sub">Sign in to manage your product links.</p>
+      <div class="card">
+        <h2 id="form-title">Sign in</h2>
+        <div id="auth-error" class="error" style="display:none;"></div>
+        <input id="auth-email" type="email" placeholder="you@example.com">
+        <input id="auth-password" type="password" placeholder="Password">
+        <button class="btn-primary" id="auth-submit">Sign in</button>
+        <button class="btn-secondary" id="auth-toggle">New here? Create an account</button>
+      </div>`;
+    let mode = 'login';
+    document.getElementById('auth-toggle').onclick = () => {
+      mode = mode === 'login' ? 'signup' : 'login';
+      document.getElementById('form-title').textContent = mode === 'login' ? 'Sign in' : 'Create account';
+      document.getElementById('auth-submit').textContent = mode === 'login' ? 'Sign in' : 'Create account';
+      document.getElementById('auth-toggle').textContent = mode === 'login' ? 'New here? Create an account' : 'Already have an account? Sign in';
+    };
+    document.getElementById('auth-submit').onclick = async () => {
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-password').value;
+      const errBox = document.getElementById('auth-error');
+      errBox.style.display = 'none';
+      try {
+        me = await api(mode === 'login' ? '/api/login' : '/api/signup', { method: 'POST', body: { email, password } });
+        store = await api('/api/store');
+        render();
+      } catch (e) {
+        errBox.textContent = e.message;
+        errBox.style.display = 'block';
+      }
+    };
+    return;
+  }
+
+  if (!me.paid) {
+    app.innerHTML = `
+      <h1>Stall</h1>
+      <p class="sub">Signed in as ${escapeHtml(me.email)}</p>
+      <div class="card">
+        <h2>Unlock product management</h2>
+        <p class="sub" style="margin-bottom:14px;">A ₹1 subscription unlocks adding, editing and removing product links.</p>
+        <div id="pay-error" class="error" style="display:none;"></div>
+        <input id="pay-phone" type="tel" placeholder="10-digit phone number (required by Cashfree)">
+        <button class="btn-primary" id="pay-btn">Pay ₹1 with Cashfree</button>
+      </div>
+      <button class="btn-secondary" id="signout-btn">Sign out</button>`;
+    document.getElementById('pay-btn').onclick = async () => {
+      const phone = document.getElementById('pay-phone').value.trim();
+      const errBox = document.getElementById('pay-error');
+      errBox.style.display = 'none';
+      try {
+        const { paymentSessionId } = await api('/api/payment/create-order', { method: 'POST', body: { phone } });
+        const cashfree = Cashfree({ mode: window.CASHFREE_MODE || 'sandbox' });
+        cashfree.checkout({ paymentSessionId, redirectTarget: '_self' });
+      } catch (e) {
+        errBox.textContent = e.message;
+        errBox.style.display = 'block';
+      }
+    };
+    document.getElementById('signout-btn').onclick = async () => { await api('/api/logout', { method: 'POST' }); me = null; store = null; render(); };
+    return;
+  }
+
+  const products = store.products || [];
+  app.innerHTML = `
+    <h1>Stall</h1>
+    <p class="sub">Signed in as ${escapeHtml(me.email)}</p>
+
+    <div class="card">
+      <h2>Brand logo</h2>
+      <div class="row">
+        <div class="thumb" id="logo-thumb">${store.logo ? `<img src="${store.logo}">` : ''}</div>
+        <button class="btn-secondary" id="logo-pick" style="width:auto;">Change logo</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Home page background</h2>
+      <div class="bg-grid" id="bg-grid"></div>
+      <button class="btn-secondary" id="bg-default" style="width:auto;">Use default (no photo)</button>
+    </div>
+
+    <div class="card">
+      <h2>Add a product link</h2>
+      <div class="row">
+        <div class="thumb" id="new-thumb">${pendingNewImage ? `<img src="${pendingNewImage}">` : ''}</div>
+        <button class="btn-secondary" id="new-pick" style="width:auto;">Add photo</button>
+      </div>
+      <input id="new-name" type="text" placeholder="Product name">
+      <input id="new-url" type="text" placeholder="Product link (https://...)">
+      <button class="btn-primary" id="add-btn">Add product link</button>
+    </div>
+
+    <div class="card">
+      <h2>Your products (${products.length})</h2>
+      <div id="product-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>Your one link</h2>
+      <div class="share-box">
+        <input readonly value="${window.location.origin}/s/${me.id}">
+        <button id="copy-btn">Copy</button>
+      </div>
+      <p class="muted">Share this link anywhere you'd share one product link — visitors only ever see your logo and products, never your email or account.</p>
+    </div>
+
+    <button class="btn-secondary" id="signout-btn">Sign out</button>
+  `;
+
+  const listEl = document.getElementById('product-list');
+  listEl.innerHTML = products.length
+    ? products.map(p => `
+        <div class="link-item">
+          <div class="thumb" data-pid="${p.id}">${p.image ? `<img src="${p.image}">` : ''}</div>
+          <div class="info"><div class="name">${escapeHtml(p.name)}</div><div class="url">${escapeHtml(p.url)}</div></div>
+          <button data-remove="${p.id}">Remove</button>
+        </div>`).join('')
+    : '<p class="muted">No products yet.</p>';
+
+  listEl.querySelectorAll('[data-pid]').forEach(el => {
+    el.onclick = () => { pendingTarget = { type: 'product', id: el.dataset.pid }; document.getElementById('camera-input').click(); };
+  });
+  listEl.querySelectorAll('[data-remove]').forEach(el => {
+    el.onclick = async () => { store.products = await api('/api/products/' + el.dataset.remove, { method: 'DELETE' }); render(); };
+  });
+
+  document.getElementById('logo-pick').onclick = () => { pendingTarget = { type: 'logo' }; document.getElementById('gallery-input').click(); };
+  document.getElementById('new-pick').onclick = () => { pendingTarget = { type: 'new' }; document.getElementById('gallery-input').click(); };
+
+  const grid = document.getElementById('bg-grid');
+  grid.innerHTML = Array.from({ length: 10 }, (_, i) => i + 1).map(i => `
+    <button class="bg-thumb ${store.background && store.background.mode === 'fixed' && store.background.index === i - 1 ? 'selected' : ''}" data-bg="${i - 1}">
+      <img src="/backgrounds/bg${i}.jpg">
+    </button>`).join('');
+  grid.querySelectorAll('[data-bg]').forEach(el => {
+    el.onclick = async () => {
+      const index = parseInt(el.dataset.bg, 10);
+      await api('/api/store/background', { method: 'PUT', body: { background: { mode: 'fixed', index } } });
+      store.background = { mode: 'fixed', index };
+      render();
+    };
+  });
+  document.getElementById('bg-default').onclick = async () => {
+    await api('/api/store/background', { method: 'PUT', body: { background: { mode: 'default', index: null } } });
+    store.background = { mode: 'default', index: null };
+    render();
+  };
+
+  document.getElementById('add-btn').onclick = async () => {
+    const name = document.getElementById('new-name').value.trim();
+    const url = document.getElementById('new-url').value.trim();
+    if (!name || !url) return;
+    store.products = await api('/api/products', { method: 'POST', body: { name, url, image: pendingNewImage } });
+    pendingNewImage = null;
+    render();
+  };
+  document.getElementById('copy-btn').onclick = () => {
+    navigator.clipboard.writeText(`${window.location.origin}/s/${me.id}`);
+  };
+  document.getElementById('signout-btn').onclick = async () => { await api('/api/logout', { method: 'POST' }); me = null; store = null; render(); };
+}
+
+async function init() {
+  try {
+    me = await api('/api/me');
+    store = await api('/api/store');
+  } catch (e) {
+    me = null;
+  }
+  render();
+}
+init();
+</script>
+</body>
+</html>
