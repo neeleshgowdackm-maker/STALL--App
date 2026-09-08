@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stall</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#1c1b19;--paper:#f6f1e7;--paper-dim:#eee6d6;--grey:#8a8478;--line:rgba(28,27,25,.14);}
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;position:relative;}
+  .page-bg{position:fixed;inset:0;z-index:-1;background-position:center;background-size:cover;}
+  .page-bg::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(28,27,25,.55),rgba(28,27,25,.72));}
+  .wrap{max-width:520px;margin:0 auto;padding:44px 20px 60px;}
+  .logo{width:100%;max-width:280px;margin:0 auto 24px;display:block;}
+  .logo img{width:100%;display:block;border-radius:10px;}
+  h1{font-family:'Fraunces',serif;font-weight:700;font-style:italic;text-transform:uppercase;font-size:26px;text-align:center;margin:0 0 30px;}
+  .link-list{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden;}
+  .link-row{background:var(--paper);display:flex;align-items:center;gap:12px;padding:14px 16px;text-decoration:none;color:inherit;}
+  .thumb{width:42px;height:42px;border-radius:8px;overflow:hidden;background:var(--paper-dim);flex-shrink:0;}
+  .thumb img{width:100%;height:100%;object-fit:cover;}
+  .name{font-size:15px;font-weight:500;}
+  .url{font-size:12.5px;color:var(--grey);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .empty{text-align:center;color:var(--grey);font-size:14px;padding:40px 0;}
+</style>
+</head>
+<body>
+<div class="page-bg" id="page-bg"></div>
+<div class="wrap" id="wrap">
+  <h1>Stall</h1>
+  <p class="empty">Loading…</p>
+</div>
+<script>
+function escapeHtml(str){ const d=document.createElement('div'); d.textContent=str; return d.innerHTML; }
+function displayUrl(u){ try{ const p=new URL(u); return p.hostname.replace(/^www\./,'')+p.pathname.replace(/\/$/,''); }catch(e){ return u; } }
+
+async function load(){
+  const id = window.location.pathname.split('/').pop();
+  const wrap = document.getElementById('wrap');
+  try{
+    const res = await fetch('/api/store/' + id);
+    if(!res.ok) throw new Error('not found');
+    const store = await res.json();
+
+    if(store.background && store.background.mode === 'fixed' && store.background.index != null){
+      document.getElementById('page-bg').style.backgroundImage = `url(/backgrounds/bg${store.background.index + 1}.jpg)`;
+    }
+
+    const logoHtml = store.logo ? `<div class="logo"><img src="${store.logo}"></div>` : '';
+    const products = store.products || [];
+    const listHtml = products.length
+      ? `<div class="link-list">${products.map(p => `
+          <a class="link-row" href="${p.url}" target="_blank" rel="noopener noreferrer">
+            <div class="thumb">${p.image ? `<img src="${p.image}">` : ''}</div>
+            <div><div class="name">${escapeHtml(p.name)}</div><div class="url">${escapeHtml(displayUrl(p.url))}</div></div>
+          </a>`).join('')}</div>`
+      : '<p class="empty">No products yet.</p>';
+
+    wrap.innerHTML = logoHtml + '<h1>Stall</h1>' + listHtml;
+  }catch(e){
+    wrap.innerHTML = '<h1>Stall</h1><p class="empty">This page could not be found.</p>';
+  }
+}
+load();
+</script>
+</body>
+</html>
